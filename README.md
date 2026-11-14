@@ -1,9 +1,9 @@
-# base
+# music
 
 # build
 
 ```bash
-docker build -t base/frankenphp:8.5 .
+docker build -t music/frankenphp:8.5 .
 ```
 
 # run

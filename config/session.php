@@ -1,7 +1,5 @@
 <?php
 
-use Illuminate\Support\Str;
-
 return [
 
     /*
@@ -127,7 +125,7 @@ return [
     |
     */
 
-    'cookie' => 'session',
+    'cookie' => env('SESSION_COOKIE', 'session'),
 
     /*
     |--------------------------------------------------------------------------
@@ -140,7 +138,7 @@ return [
     |
     */
 
-    'path' => env('SESSION_PATH', '/'),
+    'path' => env('SESSION_PATH', '/api/'),
 
     /*
     |--------------------------------------------------------------------------
@@ -196,7 +194,7 @@ return [
     |
     */
 
-    'same_site' => env('SESSION_SAME_SITE', 'lax'),
+    'same_site' => env('SESSION_SAME_SITE', 'strict'),
 
     /*
     |--------------------------------------------------------------------------

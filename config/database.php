@@ -96,6 +96,7 @@ return [
             'prefix'         => '',
             'prefix_indexes' => true,
             'search_path'    => 'public',
+            'timezone'       => env('DB_TIMEZONE', 'Asia/Hong_Kong'),
             'sslmode'        => env('DB_SSLMODE', 'prefer'),
         ],
 
@@ -114,6 +115,20 @@ return [
             // 'trust_server_certificate' => env('DB_TRUST_SERVER_CERTIFICATE', 'false'),
         ],
 
+        'music' => [
+            'driver'         => 'pgsql',
+            'host'           => env('MUSIC_DB_HOST', '127.0.0.1'),
+            'port'           => env('MUSIC_DB_PORT', '5432'),
+            'database'       => env('MUSIC_DB_DATABASE'),
+            'username'       => env('MUSIC_DB_USERNAME'),
+            'password'       => env('MUSIC_DB_PASSWORD'),
+            'charset'        => env('MUSIC_DB_CHARSET', 'utf8'),
+            'prefix'         => '',
+            'prefix_indexes' => true,
+            'search_path'    => 'public',
+            'timezone'       => env('DB_TIMEZONE', 'Asia/Hong_Kong'),
+            'sslmode'        => env('MUSIC_DB_SSLMODE', 'prefer'),
+        ],
     ],
 
     /*

@@ -13,7 +13,7 @@ return [
     |
     */
 
-    'default' => env('FILESYSTEM_DISK', 'public'),
+    'default' => 'music',
 
     /*
     |--------------------------------------------------------------------------
@@ -33,7 +33,7 @@ return [
         'local' => [
             'driver' => 'local',
             'root'   => storage_path('app/private'),
-            'serve'  => true,
+            'serve'  => false,
             'throw'  => false,
             'report' => false,
         ],
@@ -60,6 +60,13 @@ return [
             'report'                  => false,
         ],
 
+        'music' => [
+            'driver'     => 'local',
+            'root'       => env('MUSIC_STORAGE_ROOT', base_path('../storage')),
+            'visibility' => 'public',
+            'throw'      => true,
+            'report'     => false,
+        ],
     ],
 
     /*
@@ -73,8 +80,6 @@ return [
     |
     */
 
-    'links' => [
-        public_path('storage') => storage_path('app/public'),
-    ],
+    'links' => [],
 
 ];

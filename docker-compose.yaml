@@ -1,11 +1,9 @@
----
-x-base-common:
-  &base-common
-  image: base/frankenphp:8.5
+x-music-common: &music-common
+  image: music/frankenphp:8.5
   # build: .
+  network_mode: host
   environment:
-    &base-common-env
-    APP_NAME: base
+    APP_NAME: music_api
   volumes:
     - ./deploy/custom_php.ini:/usr/local/etc/php/conf.d/0_custom_php.ini:ro
     - ./:/app
@@ -14,19 +12,20 @@ x-base-common:
 
 services:
   web:
-    <<: *base-common
-    command: php -d variables_order=EGPCS artisan octane:frankenphp --host 127.0.0.1 --port 4050 --admin-port 4051 --caddyfile /app/deploy/Caddyfile
-    ports:
-      - "4050:4050"
+    <<: *music-common
+    container_name: music-web
+    command: php -d variables_order=EGPCS artisan octane:frankenphp --host 0.0.0.0 --port 4050 --admin-port 4051 --caddyfile /Caddyfile
     restart: always
 
-  queue:
-    <<: *base-common
-    command: php artisan artisan queue:work --sleep=5 --max-time=3600
+  horizon:
+    <<: *music-common
+    container_name: music-horizon
+    command: php artisan horizon
     restart: always
 
   cron:
-    <<: *base-common
+    <<: *music-common
+    container_name: music-cron
     entrypoint: /bin/bash
     command:
       - -c
@@ -34,3 +33,12 @@ services:
         crontab /app/deploy/crontab
         cron -f -L 3
     restart: always
+
+  tusd:
+    container_name: tusd
+    image: tusproject/tusd:sha-cec3998
+    network_mode: host
+    restart: always
+    volumes:
+      - ./music:/music
+    command: -host 0.0.0.0 -port 4060 -base-path /upload/ -upload-dir /music/upload -max-size 1073741824 -disable-termination -disable-download -behind-proxy -hooks-http http://127.0.0.1:4050/internal/notify/tusd -hooks-enabled-events pre-create,pre-finish,post-finish

@@ -1,5 +1,7 @@
 <?php
 
+use App\Models;
+
 return [
 
     /*
@@ -39,6 +41,7 @@ return [
         'web' => [
             'driver'   => 'session',
             'provider' => 'users',
+            'remember' => 60 * 24 * 30,
         ],
     ],
 
@@ -61,8 +64,8 @@ return [
 
     'providers' => [
         'users' => [
-            'driver' => 'eloquent',
-            'model'  => env('AUTH_MODEL', App\Models\User::class),
+            'driver' => 'music-session',
+            'model'  => env('AUTH_MODEL', Models\User::class),
         ],
 
         // 'users' => [

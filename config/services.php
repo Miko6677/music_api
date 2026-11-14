@@ -1,5 +1,7 @@
 <?php
 
+$storageRoot = env('MUSIC_STORAGE_ROOT', base_path('../storage'));
+
 return [
 
     /*
@@ -33,6 +35,27 @@ return [
             'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),
             'channel'              => env('SLACK_BOT_USER_DEFAULT_CHANNEL'),
         ],
+    ],
+
+    'todb' => [
+        'url'       => env('TODB_URL'),
+        'api_token' => env('TODB_API_TOKEN'),
+        'api_host'  => env('TODB_API_HOST', 'api.theotherdb.org'),
+    ],
+
+    'tusd' => [
+        'url'  => env('TUSD_URL', '/upload/'),
+        'path' => env('TUSD_PATH', rtrim($storageRoot, '/') . '/upload'),
+    ],
+
+    'emos' => [
+        'url'      => env('EMOS_URL'),
+        'url_link' => env('EMOS_URL_LINK'),
+    ],
+
+    'metadata' => [
+        'global' => env('METADATA_URL_GLOBAL'),
+        'path'   => $storageRoot,
     ],
 
 ];
