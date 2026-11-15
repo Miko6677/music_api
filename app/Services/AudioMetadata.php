@@ -26,12 +26,17 @@ class AudioMetadata
         if (!$response->successful()) {
             throw new \RuntimeException('元数据服务解析失败，请检查文件或稍后再试。');
         }
-        $meta = $response->json();
+
+        return $this->normalize($response->json());
+    }
+
+    public function normalize(mixed $meta): array
+    {
         if (!is_array($meta) || empty($meta['format']['hasAudio']) || !is_numeric($meta['format']['duration'] ?? null) || !is_finite((float)$meta['format']['duration']) || $meta['format']['duration'] <= 0 || ($meta['format']['hasVideo'] ?? false)) {
             throw new \RuntimeException('元数据服务未返回有效的纯音频信息。');
         }
 
-        return $meta;
+        return TextSanitizer::withoutNullBytes($meta);
     }
 
     public function cover(array $metadata): ?array

@@ -11,14 +11,15 @@ use Illuminate\Support\Str;
 
 class SyncEmosMusic extends Command
 {
-    protected $signature = 'sync:emos-music {action : export 导出旧库 / import 导入 JSON}';
+    protected $signature = 'sync:emos-music {action : export 导出旧库 / parse 解析音频 / import 导入 JSON}';
 
-    protected $description = '临时迁移 emos_api 音乐数据，文件为 storage/app/emos_music.json';
+    protected $description = '临时迁移 emos_api 音乐数据，导出数据和音频解析结果分别保存为 JSON';
 
     public function handle(): int
     {
         try {
             $path = storage_path('app/emos_music.json');
+            $metadataPath = storage_path('app/emos_music_metadata.json');
             switch ($this->argument('action')) {
                 case 'export':
                     $data = $this->export();
@@ -26,19 +27,27 @@ class SyncEmosMusic extends Command
                     File::replace($path, json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR));
                     $this->info('已导出：' . $path);
                     break;
+                case 'parse':
+                    $data = $this->readExport($path);
+                    $parsed = $this->parseMetadata($data['tables']['media']);
+                    File::replace($metadataPath, json_encode([
+                        'format'        => 'emos-music-metadata-1',
+                        'source_sha256' => hash_file('sha256', $path),
+                        'storage_root'  => rtrim(config('filesystems.disks.music.root'), '/'),
+                        'parsed_at'     => now()->toIso8601String(),
+                        ...$parsed,
+                    ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR));
+                    $this->info('已保存解析结果：' . $metadataPath);
+                    if ($parsed['metadata'] === []) {
+                        $this->error('没有解析成功的音频，失败原因已保存。');
+
+                        return self::FAILURE;
+                    }
+
+                    return self::SUCCESS;
                 case 'import':
-                    $data = json_decode(File::get($path), true, 512, JSON_THROW_ON_ERROR);
-                    if (($data['format'] ?? null) !== 'emos-music-1' || !is_array($data['tables'] ?? null)) {
-                        throw new \RuntimeException('不是本命令导出的音乐 JSON。');
-                    }
-                    foreach (['users', 'media', 'songs', 'albums', 'tracks', 'persons', 'lyrics', 'favorites'] as $table) {
-                        if (!isset($data['tables'][$table]) || !is_array($data['tables'][$table])) {
-                            throw new \RuntimeException('JSON 缺少数据：' . $table);
-                        }
-                    }
-                    if (empty($data['tables']['media'])) {
-                        throw new \RuntimeException('JSON 中没有音频，已停止导入。');
-                    }
+                    $data = $this->readExport($path);
+                    $metadata = $this->readMetadata($metadataPath, $path);
                     $database = DB::connection()->getDatabaseName();
                     $this->warn("将清空 {$database} 中所有表的数据（保留 migrations 迁移记录），再导入音乐数据。");
                     if (!$this->input->isInteractive() || !$this->confirm('确认清空并导入？', false)) {
@@ -46,11 +55,11 @@ class SyncEmosMusic extends Command
 
                         return self::FAILURE;
                     }
-                    $this->import($data['tables']);
+                    $data['tables'] = $this->import($data['tables'], $metadata);
                     $this->info('导入完成；已安排播放库同步。');
                     break;
                 default:
-                    $this->error('action 只能是 export 或 import。');
+                    $this->error('action 只能是 export、parse 或 import。');
 
                     return self::FAILURE;
             }
@@ -63,6 +72,62 @@ class SyncEmosMusic extends Command
 
             return self::FAILURE;
         }
+    }
+
+    private function readExport(string $path): array
+    {
+        $data = json_decode(File::get($path), true, 512, JSON_THROW_ON_ERROR);
+        if (!is_array($data) || ($data['format'] ?? null) !== 'emos-music-1' || !is_array($data['tables'] ?? null)) {
+            throw new \RuntimeException('不是本命令导出的音乐 JSON。');
+        }
+        foreach (['users', 'media', 'songs', 'albums', 'tracks', 'persons', 'lyrics', 'favorites'] as $table) {
+            if (!isset($data['tables'][$table]) || !is_array($data['tables'][$table])) {
+                throw new \RuntimeException('JSON 缺少数据：' . $table);
+            }
+        }
+        if (empty($data['tables']['media'])) {
+            throw new \RuntimeException('JSON 中没有音频。');
+        }
+
+        return Services\TextSanitizer::withoutNullBytes($data);
+    }
+
+    private function readMetadata(string $path, string $sourcePath): array
+    {
+        if (!File::exists($path)) {
+            throw new \RuntimeException('缺少音频解析结果，请先运行 php artisan sync:emos-music parse。');
+        }
+        $parsed = json_decode(File::get($path), true, 512, JSON_THROW_ON_ERROR);
+        if (!is_array($parsed) || ($parsed['format'] ?? null) !== 'emos-music-metadata-1' || !is_array($parsed['metadata'] ?? null)) {
+            throw new \RuntimeException('音频解析结果 JSON 无效，请重新运行 php artisan sync:emos-music parse。');
+        }
+        if (($parsed['source_sha256'] ?? null) !== hash_file('sha256', $sourcePath)) {
+            throw new \RuntimeException('导出数据已变化，请重新运行 php artisan sync:emos-music parse。');
+        }
+        $root = rtrim(config('filesystems.disks.music.root'), '/');
+        if (($parsed['storage_root'] ?? null) !== $root) {
+            throw new \RuntimeException('音乐存储目录已变化，请重新运行 php artisan sync:emos-music parse。');
+        }
+        if ($parsed['metadata'] === []) {
+            throw new \RuntimeException('解析结果中没有可导入的音频，数据库未清空。');
+        }
+        $metadata = Services\TextSanitizer::withoutNullBytes($parsed['metadata']);
+        $parser = app(Services\AudioMetadata::class);
+        foreach ($metadata as $id => &$entry) {
+            if (!is_array($entry) || !array_key_exists('cover', $entry)) {
+                throw new \RuntimeException('音频 #' . $id . ' 的解析结果不完整，请重新运行 php artisan sync:emos-music parse。');
+            }
+            $entry['data'] = $parser->normalize($entry['data'] ?? null);
+            if ($entry['cover'] !== null) {
+                $cover = $entry['cover'];
+                if (!is_array($cover) || array_diff(['path', 'mime', 'size', 'sha256', 'name'], array_keys($cover)) || !is_string($cover['path']) || !is_file($root . '/' . $cover['path'])) {
+                    throw new \RuntimeException('音频 #' . $id . ' 的本地封面缺失或无效，请重新运行 php artisan sync:emos-music parse。');
+                }
+            }
+        }
+        unset($entry);
+
+        return $metadata;
     }
 
     private function export(): array
@@ -96,17 +161,14 @@ class SyncEmosMusic extends Command
         });
     }
 
-    private function import(array $tables): void
+    private function parseMetadata(array $media): array
     {
-        if (DB::connection()->getDriverName() !== 'pgsql') {
-            throw new \RuntimeException('导入目标必须是当前项目的 PostgreSQL 数据库。');
-        }
-        $owners = $sizes = $metadata = [];
+        $metadata = $errors = [];
         $parser = app(Services\AudioMetadata::class);
         $root = rtrim(config('filesystems.disks.music.root'), '/');
-        $this->line('按转换后的路径请求 metadata；全部解析成功后才清空数据库。');
-        $progress = $this->output->createProgressBar(count($tables['media']));
-        foreach ($tables['media'] as $row) {
+        $this->line('按转换后的路径请求 metadata；解析失败的音频将跳过，解析结果和失败原因将单独保存。');
+        $progress = $this->output->createProgressBar(count($media));
+        foreach ($media as $row) {
             if (!preg_match('/^[a-fA-F0-9]{64}$/', $row['file_hash'] ?? '')) {
                 throw new \RuntimeException('音频 #' . $row['id'] . ' 缺少有效 SHA-256。');
             }
@@ -115,16 +177,38 @@ class SyncEmosMusic extends Command
                 $meta = $parser->parse($path);
                 $metadata[$row['id']] = ['data' => $meta, 'cover' => $parser->cover($meta)];
             } catch (\Throwable $e) {
-                throw new \RuntimeException('音频 #' . $row['id'] . ' ' . $path . '：' . $e->getMessage(), 0, $e);
-            }
-            $sizes[$row['user_id']] = ($sizes[$row['user_id']] ?? 0) + $row['file_size'];
-            if (!isset($owners[$row['music_song_id']]) || $row['created_at'] < $owners[$row['music_song_id']]['created_at']) {
-                $owners[$row['music_song_id']] = $row;
+                $errors[$row['id']] = ['path' => $path, 'error' => $e->getMessage()];
+                $progress->clear();
+                $this->warn('跳过音频 #' . $row['id'] . ' ' . $path . '：' . $e->getMessage());
+                $progress->display();
             }
             $progress->advance();
         }
         $progress->finish();
         $this->newLine();
+        $this->info('音频解析完成：成功 ' . count($metadata) . '，跳过 ' . count($errors) . '。');
+
+        return Services\TextSanitizer::withoutNullBytes(['metadata' => $metadata, 'errors' => $errors]);
+    }
+
+    private function import(array $tables, array $metadata): array
+    {
+        if (DB::connection()->getDriverName() !== 'pgsql') {
+            throw new \RuntimeException('导入目标必须是当前项目的 PostgreSQL 数据库。');
+        }
+        $total = count($tables['media']);
+        $tables = $this->filterParsedTables($tables, $metadata);
+        if ($tables['media'] === []) {
+            throw new \RuntimeException('没有解析成功的音频，已停止导入，数据库未清空。');
+        }
+        $this->info('读取解析结果：可导入 ' . count($tables['media']) . '，跳过 ' . ($total - count($tables['media'])) . '。');
+        $owners = $sizes = [];
+        foreach ($tables['media'] as $row) {
+            $sizes[$row['user_id']] = ($sizes[$row['user_id']] ?? 0) + $row['file_size'];
+            if (!isset($owners[$row['music_song_id']]) || $row['created_at'] < $owners[$row['music_song_id']]['created_at']) {
+                $owners[$row['music_song_id']] = $row;
+            }
+        }
 
         DB::transaction(function () use ($tables, $metadata, $sizes, $owners) {
             $users = $songs = $albums = $artists = $files = [];
@@ -233,9 +317,31 @@ class SyncEmosMusic extends Command
             foreach ($tables['favorites'] as $row) {
                 $songs[$row['relation_id']]->fans()->attach($users[$row['user_id']]->id, ['created_at' => $row['updated_at'], 'updated_at' => $row['updated_at']]);
             }
-            Models\SyncState::create(['id' => 'library', 'revision' => 1]);
+            // ensureDefault() may already create and advance the library state.
+            Models\SyncState::select(['id'])->firstOrCreate(['id' => 'library']);
+            Models\SyncState::whereKey('library')->increment('revision', 1, ['error' => null]);
         });
         // The existing scheduled SyncLibrary job picks up this revision without a queue dependency here.
+
+        return $tables;
+    }
+
+    private function filterParsedTables(array $tables, array $metadata): array
+    {
+        $tables['media'] = array_values(array_filter($tables['media'], fn($row) => isset($metadata[$row['id']])));
+        $songIds = array_fill_keys(array_column($tables['media'], 'music_song_id'), true);
+        $tables['songs'] = array_values(array_filter($tables['songs'], fn($row) => isset($songIds[$row['id']])));
+        $todbSongIds = array_fill_keys(array_filter(array_column($tables['songs'], 'todb_music_song_id')), true);
+        $tables['tracks'] = array_values(array_filter($tables['tracks'], fn($row) => isset($todbSongIds[$row['todb_music_song_id']])));
+        $albumIds = array_fill_keys(array_column($tables['tracks'], 'todb_music_album_id'), true);
+        $tables['albums'] = array_values(array_filter($tables['albums'], fn($row) => isset($albumIds[$row['todb_music_album_id']])));
+        $tables['persons'] = array_values(array_filter($tables['persons'], fn($row) => $row['todb_music_song_id'] ? isset($todbSongIds[$row['todb_music_song_id']]) : isset($albumIds[$row['todb_music_album_id']])));
+        foreach (['lyrics', 'favorites'] as $table) {
+            $songKey = $table === 'lyrics' ? 'music_song_id' : 'relation_id';
+            $tables[$table] = array_values(array_filter($tables[$table], fn($row) => isset($songIds[$row[$songKey]])));
+        }
+
+        return $tables;
     }
 
     private function filePath(string $path): string
