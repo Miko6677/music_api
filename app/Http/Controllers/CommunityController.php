@@ -49,13 +49,19 @@ class CommunityController extends Controller
 
     public function role(Request $r, int $id)
     {
-        abort_unless($r->user()->role === 'admin', 403);
+        abort_unless($r->user()->isAdmin(), 403, '只有管理员可以修改成员角色。');
+        abort_if($r->user()->id === $id, 403, '不能修改自己的角色。');
         $data = $r->validate(['role' => 'required|in:user,edit,admin']);
 
         return DB::transaction(function () use ($r, $id, $data) {
-            $admins = Models\User::select(['id'])->where('role', 'admin')->orderBy('id')->lockForUpdate()->get();
-            $u = Models\User::select(Models\User::SESSION_FIELDS)->lockForUpdate()->findOrFail($id);
-            abort_if($u->role === 'admin' && $data['role'] !== 'admin' && $admins->count() <= 1, 422, '至少需要保留一位管理员。');
+            $users = Models\User::select(['id', 'username', 'role'])
+                ->whereIn('id', [$r->user()->id, $id])->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+            abort_unless($users->get($r->user()->id)?->isAdmin(), 403, '只有管理员可以修改成员角色。');
+            $u = $users->get($id);
+            abort_unless($u, 404);
+            if ($u->role === $data['role']) {
+                return ['message' => '角色未发生变化。'];
+            }
             $before = $u->role;
             $u->update($data);
             Models\ActivityLog::create(['user_id' => $r->user()->id, 'action' => 'role.updated', 'entity_type' => 'users', 'entity_id' => (string)$u->id, 'title' => $u->username, 'before' => ['role' => $before], 'after' => $data]);
