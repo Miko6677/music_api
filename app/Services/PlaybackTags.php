@@ -25,6 +25,13 @@ class PlaybackTags
         }
     }
 
+    public function encode(array $names): string
+    {
+        $values = array_map(fn($name) => ['id' => $this->tagId($name), 'value' => $name], $names);
+
+        return $values ? json_encode(['genre' => $values], JSON_UNESCAPED_UNICODE) : '{}';
+    }
+
     private function tagId(string $name): string
     {
         $bytes = array_values(unpack('C*', md5('genre' . "\u{200b}" . mb_strtolower($name) . "\u{200b}", true)));

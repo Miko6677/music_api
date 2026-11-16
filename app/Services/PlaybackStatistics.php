@@ -30,8 +30,9 @@ class PlaybackStatistics
                 $row = $stats->get($id);
                 $genres = $tags->get($id, collect());
                 $names = $genres->pluck('tag_value')->sort()->values()->all();
+                $tagValues = $genres->map(fn($genre) => ['id' => $genre->id, 'value' => $genre->tag_value])->values()->all();
                 $this->table('album')->whereKey($id)->update(['missing' => !$row, 'song_count' => $row?->count ?? 0, 'duration' => $row?->duration ?? 0,
-                    'size' => $row?->size ?? 0, 'genre' => implode(' / ', $names), 'tags' => $names ? json_encode(['genre' => $names], JSON_UNESCAPED_UNICODE) : '{}']);
+                    'size' => $row?->size ?? 0, 'genre' => implode(' / ', $names), 'tags' => $tagValues ? json_encode(['genre' => $tagValues], JSON_UNESCAPED_UNICODE) : '{}']);
                 $this->table('folder')->whereKey('folder-'.$id)->update(['num_audio_files' => $row?->count ?? 0]);
                 if ($genres->isNotEmpty()) {
                     $this->table('album_tags')->insertOrIgnore($genres->map(fn($genre) => ['album_id' => $id, 'tag_id' => $genre->id])->all());
