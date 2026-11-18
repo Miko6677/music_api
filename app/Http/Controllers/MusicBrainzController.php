@@ -22,9 +22,10 @@ class MusicBrainzController extends Controller
         return ['item' => $musicBrainz->release($id)];
     }
 
-    public function cover(string $id, MusicBrainz $musicBrainz)
+    public function cover(Request $request, string $id, MusicBrainz $musicBrainz)
     {
-        $image = $musicBrainz->cover($id);
+        $data = $request->validate(['image_id' => ['nullable', 'string', 'max:64']]);
+        $image = $musicBrainz->cover($id, $data['image_id'] ?? null);
 
         return response($image['body'], 200, [
             'Content-Type' => $image['mime_type'],
