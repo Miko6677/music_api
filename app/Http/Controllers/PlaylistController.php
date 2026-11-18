@@ -65,6 +65,15 @@ class PlaylistController extends Controller
         return $this->save($r, $id);
     }
 
+    public function makePrivate(Request $r, string $id)
+    {
+        abort_unless($r->user()->canModerate(), 403, '只有编辑和管理员可以将公开歌单设为私密。');
+        $accountId = $this->playlists->account($r->user());
+        DB::connection('music')->transaction(fn() => $this->playlists->makePrivate($id, $accountId));
+
+        return ['message' => '歌单已设为创建者的私密歌单。'];
+    }
+
     public function append(Request $r, string $id)
     {
         $data = $r->validate(['song_ids' => ['required', 'array', 'min:1', 'max:500', Rule::exists('songs', 'id')->whereNull('deleted_at')], 'song_ids.*' => ['required', 'uuid']]);

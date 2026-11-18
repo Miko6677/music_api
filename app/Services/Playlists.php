@@ -73,6 +73,17 @@ class Playlists
         return $playlist;
     }
 
+    public function makePrivate(string $id, string $accountId): void
+    {
+        $playlist = Models\Server\Playlist::select(Models\Server\Playlist::FIELDS)->visibleTo($accountId)->lockForUpdate()->findOrFail($id);
+        if (!$playlist->public) {
+            return;
+        }
+        $before = $this->snapshot($playlist);
+        $playlist->update(['public' => false]);
+        $this->record($playlist, $accountId, 'updated', $before);
+    }
+
     public function find(string $id, string $accountId): Models\Server\Playlist
     {
         return Models\Server\Playlist::select(Models\Server\Playlist::FIELDS)->visibleTo($accountId)->findOrFail($id);

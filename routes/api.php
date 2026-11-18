@@ -39,6 +39,7 @@ Route::middleware('auth')->group(function () {
     Route::get('playlists/{id}', [Controllers\PlaylistController::class, 'show'])->where('id', '[0-9A-Za-z]{22}');
     Route::get('playlists/{id}/songs', [Controllers\PlaylistController::class, 'songs'])->where('id', '[0-9A-Za-z]{22}');
     Route::patch('playlists/{id}', [Controllers\PlaylistController::class, 'update'])->where('id', '[0-9A-Za-z]{22}');
+    Route::post('playlists/{id}/private', [Controllers\PlaylistController::class, 'makePrivate'])->where('id', '[0-9A-Za-z]{22}');
     Route::post('playlists/{id}/tracks', [Controllers\PlaylistController::class, 'append'])->where('id', '[0-9A-Za-z]{22}');
     Route::delete('playlists/{id}/tracks', [Controllers\PlaylistController::class, 'remove'])->where('id', '[0-9A-Za-z]{22}');
     Route::patch('playlists/{id}/tracks/{entry}', [Controllers\PlaylistController::class, 'move'])->where('id', '[0-9A-Za-z]{22}')->whereNumber('entry');
