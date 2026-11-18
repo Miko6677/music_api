@@ -16,6 +16,14 @@ return Application::configure(basePath: dirname(__DIR__))
         Route::prefix('internal')->group(__DIR__.'/../routes/internal.php');
     })
     ->withMiddleware(function (Middleware $middleware): void {
+        $middleware->trustProxies(at: [
+            '127.0.0.1',
+            '10.0.0.0/8',
+            '172.19.0.0/16',
+            // cf
+            '2a06:98c0::/29',
+        ]);
+
         $middleware->group('api', ['web']);
         $middleware->alias(['notice' => Http\Middleware\RequireNotice::class]);
         $middleware->redirectGuestsTo(fn () => null);
