@@ -147,6 +147,9 @@ class PublicAlbumPage
         $metadata['warning'] = $metadata['read_status'] === 'unreadable'
             ? '没有从粘贴文字中识别出专辑名或曲目，请补充专辑标题、艺人及按顺序排列的曲目。'
             : $this->trackCompletenessWarning($metadata);
+        if ($metadata['title'] && $metadata['tracks'] && !$metadata['warning']) {
+            $metadata['read_status'] = 'read';
+        }
 
         return $metadata;
     }
@@ -262,7 +265,7 @@ class PublicAlbumPage
 
         $document = new DOMDocument();
         $previous = libxml_use_internal_errors(true);
-        $loaded = $document->loadHTML($html, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_COMPACT);
+        $loaded = $document->loadHTML('<?xml encoding="UTF-8">' . $html, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_COMPACT);
         libxml_clear_errors();
         libxml_use_internal_errors($previous);
         if (!$loaded) {
@@ -345,7 +348,7 @@ class PublicAlbumPage
             }
 
             if (preg_match('/^(?:专辑名称|专辑名|Album|专辑艺人|歌手|演唱者|艺人|Artist|发行日期|发行时间|发行日期时间|Release date|发行地区|发行国家|Release country|唱片公司|发行公司|厂牌|Label|唱片编号|目录号|专辑编号|Catalog number|流派|曲风|Genre|格式|Format|碟片总数|总碟数|Discs|曲目总数|歌曲数量|Total tracks|条码|Barcode|UPC|EAN|简介|专辑简介|Description)\s*[:：]?\s*$/iu', $line) && isset($lines[$index + 1])) {
-                $line .= '：' . $this->clean((string) $lines[++$index], 1000);
+                $line = preg_replace('/\s*[:：]\s*$/u', '', $line) . '：' . $this->clean((string) $lines[++$index], 1000);
             }
 
             if (preg_match('/^(?:CD|Disc|Disk|碟片?|唱片)\s*([1-9]\d?)\b/iu', $line, $match)) {
