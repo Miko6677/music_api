@@ -3,10 +3,13 @@
 namespace App\Services;
 
 use App\Models;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
 
 class NavidromeSync
 {
+    private const ID_BATCH_SIZE = 500;
+
     public function run(?array $changes = null): void
     {
         \Illuminate\Support\Facades\Cache::lock('music-catalog-sync', 660)->block(10, function () use ($changes) {
@@ -29,34 +32,24 @@ class NavidromeSync
                 }
                 $allLibraries = Models\MediaLibrary::withTrashed()->select(Models\MediaLibrary::FIELDS)->get();
                 $libraries = $allLibraries->filter(fn($library) => !$library->trashed())->keyBy('id');
-                $query = Models\Song::withTrashed()->select(['id']);
-                if (!$full) {
-                    $query->where(function ($songs) use ($groups) {
-                        $songs->whereIn('id', $groups['songs'] ?? [])
-                            ->orWhereHas('albums', fn($albums) => $albums->whereIn('albums.id', $groups['albums'] ?? []))
-                            ->orWhereHas('artists', fn($artists) => $artists->whereIn('artists.id', $groups['artists'] ?? []))
-                            ->orWhereHas('albums.artists', fn($artists) => $artists->whereIn('artists.id', $groups['artists'] ?? []));
-                    });
-                }
-                $songIds = $query->pluck('id')->all();
-                $canonicalIds = array_map(fn($id) => 'music-'.$id, $songIds);
-                $oldQuery = $this->table('media_file')->select(['id', 'pid', 'album_id', 'library_id']);
-                if ($full) {
-                    $oldQuery->where('id', 'like', 'music-%');
-                } else {
-                    $oldQuery->where(fn($rows) => $rows->whereIn('pid', $canonicalIds)->orWhereIn('id', $canonicalIds));
-                }
-                $old = $oldQuery->get();
-                $mediaIds = $old->pluck('id')->all();
-                $albumIds = $old->pluck('album_id')->all();
-                $libraryIds = $old->pluck('library_id')->all();
-                foreach (array_chunk($mediaIds, 500) as $ids) {
+                $songIds = $full
+                    ? Models\Song::withTrashed()->orderBy('id')->pluck('id')->all()
+                    : $this->changedSongIds($groups);
+                $canonicalIds = array_chunk(array_map(fn($id) => 'music-'.$id, $songIds), self::ID_BATCH_SIZE);
+                $mediaIds = $albumIds = $libraryIds = [];
+                foreach ($this->oldMediaBatches($full, $canonicalIds) as $old) {
+                    $ids = $old->pluck('id')->all();
+                    foreach ($old as $row) {
+                        $mediaIds[$row->id] = true;
+                        $albumIds[] = $row->album_id;
+                        $libraryIds[] = $row->library_id;
+                    }
                     $this->table('media_file')->whereIn('id', $ids)->update(['missing' => true]);
                     $this->table('media_file_artists')->whereIn('media_file_id', $ids)->delete();
                     $this->table('media_file_tags')->whereIn('media_file_id', $ids)->delete();
                     $this->table('music_cover')->whereIn('id', $ids)->delete();
                 }
-                foreach (array_chunk($canonicalIds, 500) as $ids) {
+                foreach ($canonicalIds as $ids) {
                     $this->table('music_resource')->whereIn('song_id', $ids)->delete();
                 }
                 if ($full) {
@@ -71,11 +64,7 @@ class NavidromeSync
                     $this->syncLibraries($changedLibraries);
                     $libraryIds = [...$libraryIds, ...$changedLibraries->pluck('playback_id')->all()];
                 }
-                $artists = Models\Artist::withTrashed()->select(Models\Artist::FIELDS);
-                if (!$full) {
-                    $artists->whereIn('id', $groups['artists'] ?? []);
-                }
-                foreach ($artists->cursor() as $artist) {
+                foreach ($this->artists($full, $groups['artists'] ?? []) as $artist) {
                     $id = 'music-'.$artist->id;
                     $this->put('artist', ['id' => $id, 'name' => $artist->name, 'order_artist_name' => mb_strtolower($artist->name), 'biography' => $artist->description,
                         'small_image_url' => $artist->image_url ?? '', 'medium_image_url' => $artist->image_url ?? '', 'large_image_url' => $artist->image_url ?? '',
@@ -83,11 +72,7 @@ class NavidromeSync
                     $this->syncCover($id, $artist->trashed() ? null : $artist->cover_id, $artist->trashed() ? null : $artist->image_url);
                 }
                 $tags = app(PlaybackTags::class);
-                $songs = Models\Song::select(Models\Song::FIELDS)->whereIn('id', $songIds)->with([
-                    'lyrics' => fn($q) => $q->select(['id', 'song_id', 'is_default', 'structured'])->where('is_default', true), 'artists:id,name',
-                    'albums' => fn($q) => $q->select(array_map(fn($f) => 'albums.'.$f, Models\Album::FIELDS))->with('artists:id,name'),
-                    'files' => fn($q) => $q->select(['id', 'song_id', 'user_id', 'file_name', 'file_path', 'mime_type', 'quality', 'is_default', 'bitrate', 'sample_rate', 'bit_depth', 'channels', 'codec', 'file_size', 'duration', 'created_at', 'updated_at'])->orderBy('created_at')->orderBy('id')->with('uploader:id,username,pseudonym')]);
-                foreach ($songs->lazyById(200) as $song) {
+                foreach ($this->songs($songIds) as $song) {
                     $file = $song->files->firstWhere('is_default', true) ?? $song->files->first();
                     $library = $libraries->get($song->library_id);
                     if (!$file || !$library) {
@@ -98,7 +83,7 @@ class NavidromeSync
                     foreach ($song->albums->isEmpty() ? [null] : $song->albums->all() as $index => $album) {
                         $mediaId = $index === 0 ? $canonicalId : 'music-track-'.$album->pivot->id;
                         $albumIds[] = $this->albumId($song, $album, $library->playback_id);
-                        $mediaIds[] = $mediaId;
+                        $mediaIds[$mediaId] = true;
                         $this->placement($song, $file, $album, $library->playback_id, $mediaId, $tags);
                         if ($mediaId !== $canonicalId) {
                             $this->table('music_song_alias')->upsert([['source_id' => $mediaId, 'target_id' => $canonicalId]], ['source_id'], ['target_id']);
@@ -113,9 +98,84 @@ class NavidromeSync
                     }
                 }
                 app(PlaybackStatistics::class)->refresh($albumIds, $libraryIds);
-                app(PlaylistTracks::class)->refreshAllStats(array_values(array_unique($mediaIds)));
+                app(PlaylistTracks::class)->refreshAllStats(array_keys($mediaIds));
             });
         });
+    }
+
+    private function changedSongIds(array $groups): array
+    {
+        $songIds = [];
+        foreach (['songs', 'albums', 'artists'] as $type) {
+            foreach (array_chunk($groups[$type] ?? [], self::ID_BATCH_SIZE) as $ids) {
+                $songs = Models\Song::withTrashed();
+                match ($type) {
+                    'songs' => $songs->whereIn('songs.id', $ids),
+                    'albums' => $songs->whereHas('albums', fn($albums) => $albums->whereIn('albums.id', $ids)),
+                    'artists' => $songs->where(fn($query) => $query
+                        ->whereHas('artists', fn($artists) => $artists->whereIn('artists.id', $ids))
+                        ->orWhereHas('albums.artists', fn($artists) => $artists->whereIn('artists.id', $ids))),
+                };
+                foreach ($songs->pluck('songs.id') as $id) {
+                    $songIds[$id] = true;
+                }
+            }
+        }
+
+        $ids = array_keys($songIds);
+        sort($ids, SORT_STRING);
+
+        return $ids;
+    }
+
+    private function oldMediaBatches(bool $full, array $canonicalIdBatches): \Generator
+    {
+        $media = $this->table('media_file')->select(['id', 'album_id', 'library_id']);
+        if ($full) {
+            yield from $media->where('id', 'like', 'music-%')->lazyById(self::ID_BATCH_SIZE)->chunk(self::ID_BATCH_SIZE);
+
+            return;
+        }
+
+        foreach ($canonicalIdBatches as $ids) {
+            $batch = (clone $media)->where(fn($rows) => $rows->whereIn('pid', $ids)->orWhereIn('id', $ids));
+            yield from $batch->lazyById(self::ID_BATCH_SIZE)->chunk(self::ID_BATCH_SIZE);
+        }
+    }
+
+    private function artists(bool $full, array $changedIds): \Generator
+    {
+        $artists = Models\Artist::withTrashed()->select(Models\Artist::FIELDS);
+        if ($full) {
+            yield from $artists->lazyById(self::ID_BATCH_SIZE);
+
+            return;
+        }
+
+        foreach (array_chunk($changedIds, self::ID_BATCH_SIZE) as $ids) {
+            yield from (clone $artists)->whereIn('id', $ids)->cursor();
+        }
+    }
+
+    private function songs(array $songIds): \Generator
+    {
+        $songs = Models\Song::select(Models\Song::FIELDS)->with([
+            'lyrics' => fn($q) => $q->select(['id', 'song_id', 'is_default', 'structured'])->where('is_default', true),
+            'artists:id,name',
+            'albums' => fn($q) => $q->select(array_map(fn($f) => 'albums.'.$f, Models\Album::FIELDS)),
+            'files' => fn($q) => $q->select(['id', 'song_id', 'user_id', 'file_name', 'file_path', 'mime_type', 'quality', 'is_default', 'bitrate', 'sample_rate', 'bit_depth', 'channels', 'codec', 'file_size', 'duration', 'created_at', 'updated_at'])->orderBy('created_at')->orderBy('id'),
+        ]);
+        foreach (array_chunk($songIds, 200) as $ids) {
+            $batch = (clone $songs)->whereIn('id', $ids)->orderBy('id')->get();
+            foreach ($batch->pluck('albums')->collapse()->chunk(self::ID_BATCH_SIZE) as $albums) {
+                (new Collection($albums))->load('artists:id,name');
+            }
+            foreach ($batch->pluck('files')->collapse()->chunk(self::ID_BATCH_SIZE) as $files) {
+                (new Collection($files))->load('uploader:id,username,pseudonym');
+            }
+
+            yield from $batch;
+        }
     }
 
     private function albumId(Models\Song $song, ?Models\Album $album, int $libraryId): string

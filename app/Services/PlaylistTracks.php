@@ -3,10 +3,13 @@
 namespace App\Services;
 
 use App\Models;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 
 class PlaylistTracks
 {
+    private const STATS_BATCH_SIZE = 500;
+
     public function songs($entries, Models\User $user): array
     {
         $ids = $entries->pluck('media_file_id')->unique();
@@ -90,9 +93,25 @@ class PlaylistTracks
             ->select(['playlist.id', 'playlist.song_count', 'playlist.duration', 'playlist.size'])
             ->selectRaw('count(media_file.id) AS next_count, coalesce(sum(media_file.duration), 0) AS next_duration, coalesce(sum(media_file.size), 0) AS next_size')
             ->groupBy('playlist.id');
-        if ($mediaIds !== null) {
-            $stats->whereIn('playlist.id', Models\Server\PlaylistTrack::select(['playlist_id'])->whereIn('media_file_id', $mediaIds));
+        if ($mediaIds === null) {
+            $this->applyStats($stats);
+
+            return;
         }
+
+        $playlistIds = [];
+        foreach (array_chunk($mediaIds, self::STATS_BATCH_SIZE) as $ids) {
+            foreach (Models\Server\PlaylistTrack::whereIn('media_file_id', $ids)->distinct()->pluck('playlist_id') as $id) {
+                $playlistIds[$id] = true;
+            }
+        }
+        foreach (array_chunk(array_keys($playlistIds), self::STATS_BATCH_SIZE) as $ids) {
+            $this->applyStats((clone $stats)->whereIn('playlist.id', $ids));
+        }
+    }
+
+    private function applyStats(Builder $stats): void
+    {
         foreach ($stats->cursor() as $row) {
             if ((int)$row->song_count === (int)$row->next_count && (float)$row->duration === (float)$row->next_duration && (int)$row->size === (int)$row->next_size) {
                 continue;
