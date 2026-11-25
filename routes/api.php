@@ -46,6 +46,7 @@ Route::middleware('auth')->group(function () {
     Route::delete('playlists/{id}', [Controllers\PlaylistController::class, 'destroy'])->where('id', '[0-9A-Za-z]{22}');
     Route::put('songs/{id}/favorite', [Controllers\CatalogController::class, 'favorite'])->whereUuid('id');
     Route::post('albums/matches', [Controllers\CatalogController::class, 'albumMatches']);
+    Route::get('musicbrainz/releases', [Controllers\MusicBrainzController::class, 'releases'])->middleware('throttle:30,1');
     Route::get('albums/{id}/positions', [Controllers\CatalogController::class, 'albumPositions'])->whereUuid('id');
     Route::patch('songs/library', [Controllers\CatalogController::class, 'assignLibrary']);
     Route::patch('songs/album', [Controllers\CatalogController::class, 'assignAlbum']);
